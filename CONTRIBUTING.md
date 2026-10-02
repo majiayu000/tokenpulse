@@ -9,11 +9,13 @@ Python 3.10+ is required. There are no dependencies to install.
 ```bash
 git clone https://github.com/majiayu000/tokenpulse.git
 cd tokenpulse
-python3 -m compileall -q speed.py test_speed.py
+python3 -m compileall -q speed.py measurement.py test_speed.py test_measurement.py examples
 python3 -m unittest -v
 ```
 
 Add focused tests when changing parsing, timing or token accounting. Document unsupported or unobservable fields rather than estimating them silently. Preserve the CLI exit-code contract.
+
+Keep the stream component provider-independent; existing benchmark runners own model calls and scoring. See the [measurement contract](docs/speed-methodology.md). Check integration with `python3 -m examples.stream_demo`; it uses synthetic timing and makes no requests.
 
 ## Pull requests
 

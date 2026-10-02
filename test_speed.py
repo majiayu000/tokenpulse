@@ -1,9 +1,11 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import speed
 
@@ -63,7 +65,14 @@ class Measurements(unittest.TestCase):
         self.assertEqual(sample.visible_characters, 5)
 
     def test_codex_unfinished_turn_is_not_counted(self):
-        self.assertEqual(speed.read_codex(self.write(self.codex(False))), [])
+        samples = speed.read_codex(self.write(self.codex(False)))
+        self.assertEqual(speed.report(samples)['skipped'], {'unfinished': 1})
+
+    def test_codex_abort_cannot_be_marked_complete_later(self):
+        records = self.codex(False)
+        records.extend([codex_row('event_msg', 8, type='turn_aborted'),
+                        codex_row('event_msg', 9, type='task_complete')])
+        self.assertEqual(speed.report(speed.read_codex(self.write(records)))['skipped'], {'unfinished': 1})
 
     def test_codex_subagent_session_is_excluded(self):
         records = self.codex()
@@ -77,6 +86,14 @@ class Measurements(unittest.TestCase):
         sample = speed.read_claude(self.write(records))[0]
         self.assertEqual((sample.seconds, sample.output_tokens, sample.thinking_tokens), (5, 100, 20))
         self.assertEqual((sample.visible_characters, sample.input_tokens), (5, 20))
+
+    def test_replayed_claude_block_does_not_extend_elapsed_time(self):
+        records = [human(0), assistant(5), assistant(20)]
+        sample = speed.read_claude(self.write(records))[0]
+        self.assertEqual((sample.seconds, sample.visible_characters), (5, 5))
+        records[-1]['message']['content'][0]['text'] = 'conflicting text'
+        with self.assertRaisesRegex(ValueError, 'conflicting content'):
+            speed.read_claude(self.write(records))
 
     def test_single_claude_block_has_a_valid_duration(self):
         sample = speed.read_claude(self.write([human(0), assistant(5)]))[0]
@@ -117,6 +134,32 @@ class Measurements(unittest.TestCase):
         self.assertNotIn('答案abc', serialized)
         self.assertNotIn('response_ids', serialized)
 
+    def test_missing_input_usage_is_unknown(self):
+        sample = speed.read_codex(self.write(self.codex()))[0]
+        self.assertIsNone(sample.input_tokens)
+        self.assertIsNone(sample.cached_input_tokens)
+        group = speed.report([sample])['groups'][0]
+        self.assertIsNone(group['median_input_tokens'])
+        self.assertEqual(group['input_tokens_known_samples'], 0)
+        row = assistant(5)
+        del row['message']['usage']['cache_read_input_tokens']
+        claude = speed.read_claude(self.write([human(0), row]))[0]
+        self.assertIsNone(claude.input_tokens)
+        self.assertIsNone(claude.cached_input_tokens)
+
+    def test_conflicting_duplicate_is_an_error(self):
+        sample = speed.read_codex(self.write(self.codex()))[0]
+        with self.assertRaisesRegex(ValueError, 'conflicting'):
+            speed.report([sample, replace(sample, output_tokens=111)])
+
+    def test_impossible_or_fractional_usage_fails(self):
+        sample = speed.read_codex(self.write(self.codex()))[0]
+        for broken in (replace(sample, output_tokens=True),
+                       replace(sample, thinking_tokens=111),
+                       replace(sample, input_tokens=2, cached_input_tokens=3)):
+            with self.assertRaises(ValueError):
+                speed.report([broken])
+
     def test_timezone_and_zero_duration(self):
         with self.assertRaises(ValueError):
             speed.timestamp('2026-01-01T00:00:00')
@@ -132,6 +175,26 @@ class Measurements(unittest.TestCase):
                                   str(self.path), '--output', str(output)], capture_output=True, text=True)
         self.assertEqual(process.returncode, 2)
         self.assertFalse(output.exists())
+
+    def test_cli_refuses_to_overwrite_a_source(self):
+        self.write(self.codex())
+        before = self.path.read_bytes()
+        alias = Path(self.temp.name) / 'alias.jsonl'
+        alias.symlink_to(self.path)
+        process = subprocess.run([sys.executable, str(Path(speed.__file__)), '--codex',
+                                  str(self.path), '--output', str(alias)], capture_output=True, text=True)
+        self.assertEqual(process.returncode, 2)
+        self.assertIn('overwrite', process.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_failed_report_replacement_preserves_previous_file(self):
+        output = Path(self.temp.name) / 'report.json'
+        output.write_text('previous report')
+        with patch.object(Path, 'replace', side_effect=OSError('synthetic disk error')):
+            with self.assertRaises(OSError):
+                speed.write_report(output, {'groups': []})
+        self.assertEqual(output.read_text(), 'previous report')
+        self.assertEqual(list(Path(self.temp.name).glob('.tokenpulse-*')), [])
 
 
 if __name__ == '__main__':

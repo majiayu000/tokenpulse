@@ -5,9 +5,26 @@
 
 **Measure the wait. Count the output. Keep the boundaries honest.**
 
-A read-only LLM throughput analyzer for Codex rollout logs and Claude Desktop transcripts, with a protocol for controlled comparisons. Python 3.10+, standard library only. It never sends model requests or starts conversations.
+A speed measurement component for LLM benchmarks, plus read-only analysis of Codex rollout logs and Claude Desktop transcripts. Python 3.10+, standard library only. It never sends model requests or starts conversations.
 
 [中文说明及完整实验方案](README.zh-CN.md)
+
+## Integrate with an existing benchmark
+
+Use `measurement.StreamMeasurement` around a single request in your existing runner. Feed unique text/thinking deltas, then finish immediately with final usage. Apply slow output verification afterwards so scoring time does not enter request latency. It captures request-relative monotonic timestamps without storing text. The runner owns model calls and scoring.
+
+The component reports end-to-end latency, first observable output, first-answer wait, weighted token/character rates and character throughput after the first chunk. Warmups, failures, mismatches and unverified outputs remain visible; only verified, completed, positive-duration measurements enter speed summaries. Missing token usage stays unknown. Chunk timing is not token timing.
+
+Try the **synthetic** example without calling a model:
+
+```bash
+mkdir -p private-data
+python3 -m examples.stream_demo > private-data/synthetic-stream.jsonl
+python3 speed.py --stream private-data/synthetic-stream.jsonl \\
+  --output reports/synthetic-stream.json
+```
+
+These example numbers use a fake clock and do not measure any model. See the [measurement formulas and integration contract](docs/speed-methodology.md). `--stream` reports are separate from historical logs and cannot be combined with log options or `--since`.
 
 ## What it measures
 
@@ -21,7 +38,7 @@ Both clients use the same conceptual boundaries: input logged to final output lo
 
 The logs cannot prove that every hidden-thinking interval is covered. Work before the input timestamp is unobservable here; this metric is effective client throughput, not precise model generation speed.
 
-Only completed human turns without tools enter the report. Tool turns, automatic notifications, subagents, incomplete turns and nonpositive durations are excluded. Tool time is never estimated and subtracted.
+In historical-log mode, only completed human turns without tools enter the report. Tool turns, automatic notifications, subagents, incomplete turns and nonpositive durations are excluded. Tool time is never estimated and subtracted.
 
 Native output tokens include thinking; thinking counts are a breakdown, never added again. Visible characters count text with Python `len`, excluding thinking and tool payloads. Native tokenizers differ, so native token/s alone cannot establish a cross-model ranking. Character/s is useful with identical output, but does not control differences between unrelated historical tasks.
 
@@ -65,9 +82,11 @@ For remote logs, copy the needed transcripts and Desktop metadata locally with S
 - **Claude:** keeps the maximum cumulative usage per `message.id`, and counts text blocks once per `(message.id, apiBlockIndex)` or record UUID. Starts at explicit `origin.kind=human`; requires the last reply to finish with `stop_reason=end_turn`. Stop-hook timestamps are excluded. Effort comes from transcript records only.
 - **Aggregation:** groups by source, model, effort, service tier and client version. Reports total-weighted rates, sample counts, elapsed median/range, median input tokens and individual samples. Duplicate response sets are excluded.
 
+Unknown input/cache counts remain `null`; input medians report their known-sample coverage. Conflicting duplicate response sets fail rather than silently keeping one. Historical wall-clock reports and monotonic stream reports are explicitly labeled and never pooled.
+
 This parser targets the verified current log schemas; it has no old-format compatibility layer. Missing boundaries or models cannot form samples. Malformed records and missing deduplication IDs fail the run without writing a partial report. Skip counts cover formed samples, not every unparseable or ignored row.
 
-Exit codes: **0** usable results; **1** no eligible samples (an empty report is written); **2** input/parse error (no new report is written). Existing output files are not removed on error; check the exit code before using a report.
+Exit codes: **0** usable speed samples; **1** no eligible speed samples (a report is still written, including stream attempt diagnostics); **2** input/parse/write error. Reports are written atomically and cannot overwrite input files. Existing output files are preserved on error; check the exit code before using a report.
 
 Reports omit source paths, prompt/response/thinking text and raw message IDs. Sample IDs are hashes of response IDs. They still contain model names, timestamps and configuration metadata, so review them before publishing.
 
@@ -79,7 +98,7 @@ Claude streaming usage is cumulative, and thinking tokens are included in output
 
 ## Controlled experiment protocol
 
-The first release implements **offline analysis**, not a live benchmark runner. The full protocol is in the [Chinese methodology](README.zh-CN.md#改进后的受控实验方案).
+The repository provides offline analysis and an importable stream measurement component. It does not implement model calls, a task bank, capability scoring or cost estimates. Use your existing benchmark runner; the full protocol and formulas are in the [measurement contract](docs/speed-methodology.md) and [Chinese methodology](README.zh-CN.md#改进后的受控实验方案).
 
 1. Freeze identical prompts, system instructions, context and tool settings. Record exact model/effort/tier/output limits, input/cache counts, client or SDK version and network route. Effort names across providers are not equivalent controls.
 2. Separate fixed, nonrepetitive long-text output from short, verifiable reasoning tasks. Verify exact long-text output; report answer accuracy for reasoning. Do not pool the two workloads.
@@ -92,11 +111,11 @@ Use the same API harness for interface comparisons; CLI/Desktop tests measure cl
 ## Development and data handling
 
 ```bash
-python3 -m compileall -q speed.py test_speed.py
+python3 -m compileall -q speed.py measurement.py test_speed.py test_measurement.py examples
 python3 -m unittest -v
 ```
 
-Tests use synthetic logs and cover cumulative usage, thinking accounting, text deduplication, tool exclusion, notifications, incomplete turns, timing, weighted aggregation, report privacy and error handling. CI runs these checks without model access.
+Tests use synthetic logs and clocks. They cover cumulative usage, thinking accounting, text deduplication, tool exclusion, notifications, incomplete turns, stream boundaries, output verification, failures/warmups, weighted aggregation, privacy and atomic error handling. CI also runs the synthetic CLI example without model access.
 
 Real logs and generated reports stay out of Git: `private-data/`, `reports/`, JSONL, databases and environment files are ignored. No telemetry or automatic uploads.
 

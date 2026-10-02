@@ -14,6 +14,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Build (syntax compilation)
-        run: python -m compileall -q speed.py test_speed.py
+        run: python -m compileall -q speed.py measurement.py test_speed.py test_measurement.py examples
       - name: Test
         run: python -m unittest -v
+      - name: Synthetic stream integration (no model requests)
+        run: |
+          python -m examples.stream_demo > /tmp/tokenpulse-demo.jsonl
+          python speed.py --stream /tmp/tokenpulse-demo.jsonl --output /tmp/tokenpulse-report.json
