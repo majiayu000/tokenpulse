@@ -117,6 +117,10 @@ python3 -m unittest -v
 
 Tests use synthetic logs and clocks. They cover cumulative usage, thinking accounting, text deduplication, tool exclusion, notifications, incomplete turns, stream boundaries, output verification, failures/warmups, weighted aggregation, privacy and atomic error handling. CI also runs the synthetic CLI example without model access.
 
-Real logs and generated reports stay out of Git: `private-data/`, `reports/`, JSONL, databases and environment files are ignored. No telemetry or automatic uploads.
+Raw logs and unreviewed generated reports stay out of Git: `private-data/`, `reports/`, JSONL, databases and environment files are ignored. Reviewed experiment summaries may be archived separately after removing conversations, credentials, private configuration, local paths and raw message/session IDs. No telemetry or automatic uploads.
+
+## Archived experiments
+
+- [2026-10-12: GPT-6.1 Sol, ordinary and Fast settings through Codex CLI](experiments/2026-10-12-codex-sol61-fast/README.md). Three runs per setting, using the historical input-to-final-output log boundary. This is a small client-experience observation, with unknown actual served tiers and differing cache/context counts, not a model leaderboard.
 
 See [contributing](CONTRIBUTING.md), [security reporting](SECURITY.md), and the [MIT license](LICENSE).
